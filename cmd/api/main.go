@@ -41,7 +41,7 @@ func main() {
 	roles := application.NewRoleService(roleRepo)
 	auth := application.NewAuthService(
 		pgadapter.NewUserRepo(pool), roles, pgadapter.NewSessionRepo(pool),
-		redisadapter.NewSessionStore(rdb), cfg.JWTSecret, cfg.JWTIssuer, 24*time.Hour,
+		redisadapter.NewSessionStore(rdb), cfg.JWTSecret, cfg.JWTIssuer, lifetimesFromEnv(),
 	)
 	if err := auth.SeedAdmin(ctx, cfg.MasterAdminPassword); err != nil {
 		log.Fatal(err)
@@ -61,4 +61,24 @@ func main() {
 	shutdown, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	_ = srv.Shutdown(shutdown)
+}
+
+// lifetimesFromEnv reads the token clocks: ACCESS_TOKEN_TTL (default 5m), REFRESH_TOKEN_TTL
+// (default 8h, renewed on every refresh) and SESSION_MAX_TTL (default 12h, hard cap from login).
+func lifetimesFromEnv() application.Lifetimes {
+	return application.Lifetimes{
+		Access:     durationEnv("ACCESS_TOKEN_TTL", 5*time.Minute),
+		Refresh:    durationEnv("REFRESH_TOKEN_TTL", 8*time.Hour),
+		SessionMax: durationEnv("SESSION_MAX_TTL", 12*time.Hour),
+	}
+}
+
+func durationEnv(key string, def time.Duration) time.Duration {
+	if v := os.Getenv(key); v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d > 0 {
+			return d
+		}
+		log.Printf("invalid %s=%q, using %s", key, v, def)
+	}
+	return def
 }

@@ -11,6 +11,8 @@ var (
 	ErrEmailTaken         = errors.New("email already registered")
 	ErrNotFound           = errors.New("not found")
 	ErrInvalid            = errors.New("invalid")
+	// ErrInvalidRefresh: unknown, expired, revoked or reused refresh token — the client must log in again.
+	ErrInvalidRefresh = errors.New("invalid refresh token")
 )
 
 type User struct {

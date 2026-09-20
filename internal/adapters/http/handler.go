@@ -23,6 +23,7 @@ func New(auth *application.AuthService, roles *application.RoleService) *Handler
 func (h *Handler) RegisterRoutes(r *gin.Engine, jwt gin.HandlerFunc) {
 	r.POST("/auth/register", h.register)
 	r.POST("/auth/login", h.login)
+	r.POST("/auth/refresh", h.refresh)
 	r.GET("/auth/me", jwt, h.me)
 	r.POST("/auth/logout", jwt, h.logout)
 	r.GET("/users", jwt, h.list)
@@ -86,7 +87,7 @@ func (h *Handler) register(c *gin.Context) {
 	if in.Name == "" {
 		in.Name = in.Email
 	}
-	user, token, err := h.auth.Register(c.Request.Context(), in.Email, in.Password, in.Name)
+	user, tokens, err := h.auth.Register(c.Request.Context(), in.Email, in.Password, in.Name)
 	if errors.Is(err, domain.ErrEmailTaken) {
 		httpserver.Error(c, http.StatusConflict, err)
 		return
@@ -95,8 +96,17 @@ func (h *Handler) register(c *gin.Context) {
 		httpserver.Error(c, http.StatusInternalServerError, err)
 		return
 	}
+	c.JSON(http.StatusCreated, h.sessionResponse(c, user, tokens))
+}
+
+// sessionResponse is the shared login/register/refresh payload. "token" stays the access JWT so
+// existing clients keep working until they adopt refresh_token.
+func (h *Handler) sessionResponse(c *gin.Context, user domain.User, tokens application.Tokens) gin.H {
 	menuPerms, _ := h.auth.MenuPermissions(c.Request.Context(), user.RoleID)
-	c.JSON(http.StatusCreated, gin.H{"token": token, "user": publicUser(user), "menu_permissions": menuPerms})
+	return gin.H{
+		"token": tokens.Access, "refresh_token": tokens.Refresh, "expires_in": tokens.ExpiresIn,
+		"user": publicUser(user), "menu_permissions": menuPerms,
+	}
 }
 
 func (h *Handler) login(c *gin.Context) {
@@ -105,13 +115,32 @@ func (h *Handler) login(c *gin.Context) {
 		httpserver.Error(c, http.StatusBadRequest, err)
 		return
 	}
-	user, token, err := h.auth.Login(c.Request.Context(), in.Email, in.Password, c.GetHeader("User-Agent"), c.ClientIP())
+	user, tokens, err := h.auth.Login(c.Request.Context(), in.Email, in.Password, c.GetHeader("User-Agent"), c.ClientIP())
 	if err != nil {
 		httpserver.Error(c, http.StatusUnauthorized, domain.ErrInvalidCredentials)
 		return
 	}
-	menuPerms, _ := h.auth.MenuPermissions(c.Request.Context(), user.RoleID)
-	c.JSON(http.StatusOK, gin.H{"token": token, "user": publicUser(user), "menu_permissions": menuPerms})
+	c.JSON(http.StatusOK, h.sessionResponse(c, user, tokens))
+}
+
+func (h *Handler) refresh(c *gin.Context) {
+	var in struct {
+		RefreshToken string `json:"refresh_token" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&in); err != nil {
+		httpserver.Error(c, http.StatusBadRequest, err)
+		return
+	}
+	user, tokens, err := h.auth.Refresh(c.Request.Context(), in.RefreshToken)
+	if errors.Is(err, domain.ErrInvalidRefresh) {
+		httpserver.Error(c, http.StatusUnauthorized, err)
+		return
+	}
+	if err != nil {
+		httpserver.Error(c, http.StatusInternalServerError, err)
+		return
+	}
+	c.JSON(http.StatusOK, h.sessionResponse(c, user, tokens))
 }
 
 func (h *Handler) logout(c *gin.Context) {
