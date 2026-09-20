@@ -125,7 +125,11 @@ func (h *Handler) me(c *gin.Context) {
 		httpserver.Error(c, http.StatusNotFound, err)
 		return
 	}
-	c.JSON(http.StatusOK, publicUser(user))
+	// menu_permissions lets a client that only kept the token (mobile session
+	// restore) refresh the role's menu levels without a new login.
+	out := publicUser(user)
+	out["menu_permissions"], _ = h.auth.MenuPermissions(c.Request.Context(), user.RoleID)
+	c.JSON(http.StatusOK, out)
 }
 
 func (h *Handler) list(c *gin.Context) {
